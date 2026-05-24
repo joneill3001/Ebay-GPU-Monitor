@@ -1,0 +1,7 @@
+# Scanner behaviour — edit poll interval etc. here
+# Batched eBay searches: 18 API calls/cycle (33 GPU targets). At 120s poll, ~510 cycles/17h ≈ 9,180 calls/day.
+poll_interval_seconds: 120
+max_listing_age_minutes: 45
+limit: 50
+search_delay_seconds: 1.5
+enabled: true

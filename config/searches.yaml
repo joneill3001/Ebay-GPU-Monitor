@@ -1,0 +1,5 @@
+# DEPRECATED — use config/prices.yaml for target prices and channel IDs.
+# Use config/settings.yaml for poll interval and scanner options.
+#
+# The scanner now auto-builds all searches from prices.yaml + src/gpu_catalog.py
+# (NVIDIA 10/20/30/40/50 series, xx60–xx90, Ti & Super, no xx50).
