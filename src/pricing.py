@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from src.validation import MAX_PRICE_GBP
+
 
 @dataclass
 class PriceInfo:
@@ -57,7 +59,9 @@ def _shipping_cost(item: dict[str, Any]) -> float:
 def extract_price(item: dict[str, Any]) -> PriceInfo:
     item_price, currency, is_auction = _item_price(item)
     shipping = _shipping_cost(item)
-    landed = item_price + shipping
+    landed = min(item_price + shipping, MAX_PRICE_GBP)
+    item_price = min(item_price, MAX_PRICE_GBP)
+    shipping = min(shipping, MAX_PRICE_GBP)
     return PriceInfo(
         item_price=item_price,
         shipping_cost=shipping,

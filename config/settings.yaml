@@ -5,3 +5,5 @@ max_listing_age_minutes: 45
 limit: 50
 search_delay_seconds: 1.5
 enabled: true
+ebay_api_daily_limit: 5000
+near_miss_percentage_threshold: 10

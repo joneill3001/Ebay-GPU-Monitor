@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 
 from src.config import load_config
@@ -12,8 +13,10 @@ from src.store import DealStore
 
 
 def setup_logging() -> None:
+    level_name = os.getenv("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
     logging.basicConfig(
-        level=logging.INFO,
+        level=level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
@@ -38,7 +41,12 @@ async def main() -> None:
         delivery_postcode=config.ebay_delivery_postcode,
         limit=config.search_limit,
     )
-    discord = DiscordNotifier(config.discord_bot_token)
+    discord = DiscordNotifier(
+        config.discord_bot_token,
+        ebay_client=ebay,
+        store=store,
+        api_daily_limit=config.ebay_api_daily_limit,
+    )
 
     try:
         await discord.start()

@@ -9,12 +9,21 @@ from urllib.parse import quote
 
 import httpx
 
+from src.ebay_filters import GRAPHICS_CARD_CATEGORY_ID, field_filter_fallbacks
 from src.pricing import PriceInfo, extract_price
+from src.validation import (
+    MAX_PRICE_GBP,
+    is_safe_ebay_image_url,
+    is_safe_ebay_listing_url,
+    sanitize_search_query,
+    sanitize_title,
+)
 
 logger = logging.getLogger(__name__)
 
 OAUTH_URL = "https://api.ebay.com/identity/v1/oauth2/token"
 SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
+RATE_LIMITS_URL = "https://api.ebay.com/developer/analytics/v1_beta/rate_limit/"
 
 
 @dataclass
@@ -25,7 +34,7 @@ class Listing:
     image_url: str | None
     listed_at: datetime
     price: PriceInfo
-    raw: dict[str, Any]
+    condition: str | None = None
 
 
 class EbayClient:
@@ -40,11 +49,14 @@ class EbayClient:
         self._client_id = client_id
         self._client_secret = client_secret
         self._marketplace_id = marketplace_id
-        self._delivery_postcode = delivery_postcode.replace(" ", "").upper()
-        self._limit = limit
+        self._delivery_postcode = delivery_postcode
+        self._limit = max(1, min(limit, 200))
         self._token: str | None = None
         self._token_expires_at: float = 0.0
-        self._http = httpx.Client(timeout=30.0)
+        self._http = httpx.Client(
+            timeout=30.0,
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        )
 
     def close(self) -> None:
         self._http.close()
@@ -77,27 +89,9 @@ class EbayClient:
             )
         return "contextualLocation=country%3DGB"
 
-    def _filter_variants(self, target_price: float) -> list[str]:
-        """Filter sets from most specific to minimal (eBay 500s on invalid combos)."""
-        max_price = int(target_price)
-        base = [
-            f"deliveryCountry:GB,price:[..{max_price}],priceCurrency:GBP",
-        ]
-        with_postcode = (
-            f"deliveryCountry:GB,deliveryPostalCode:{self._delivery_postcode},"
-            f"price:[..{max_price}],priceCurrency:GBP"
-            if self._delivery_postcode
-            else None
-        )
-
-        # buyingOptions + newlyListed is unsupported (eBay error 12034) — omit buyingOptions.
-        # Default results are mostly Buy It Now; auction/BIN combo listings are still included.
-        variants = []
-        if with_postcode:
-            variants.append(with_postcode)
-        variants.append(base[0])
-        variants.append(f"deliveryCountry:GB,price:[..{max_price}]")
-        return variants
+    def _filter_variants(self, target_price: float) -> list[tuple[str, bool]]:
+        """Field filter strings from strictest to minimal (eBay 500s on invalid combos)."""
+        return field_filter_fallbacks(target_price, self._delivery_postcode)
 
     def search(
         self,
@@ -105,8 +99,13 @@ class EbayClient:
         max_price: float,
         *,
         label: str = "",
+        aspect_filter: str | None = None,
         retries: int = 3,
     ) -> list[Listing]:
+        if max_price <= 0 or max_price > MAX_PRICE_GBP:
+            raise ValueError(f"max_price must be between 0 and {MAX_PRICE_GBP}")
+
+        safe_query = sanitize_search_query(query)
         token = self._get_token()
         headers = {
             "Authorization": f"Bearer {token}",
@@ -114,17 +113,21 @@ class EbayClient:
             "X-EBAY-C-ENDUSERCTX": self._enduser_ctx(),
         }
         params_base = {
-            "q": query,
+            "q": safe_query,
             "sort": "newlyListed",
             "limit": str(self._limit),
+            "category_ids": GRAPHICS_CARD_CATEGORY_ID,
         }
+        if aspect_filter:
+            params_base["aspect_filter"] = aspect_filter
         log_label = label or query
 
         last_error: Exception | None = None
         last_body: str = ""
         filter_variants = self._filter_variants(max_price)
+        primary_filter = filter_variants[0][0] if filter_variants else ""
 
-        for filter_str in filter_variants:
+        for filter_str, with_conditions in filter_variants:
             params = {**params_base, "filter": filter_str}
             for attempt in range(retries):
                 try:
@@ -137,23 +140,26 @@ class EbayClient:
                         time.sleep(wait)
                         continue
                     if response.status_code >= 400:
-                        last_body = response.text[:500]
+                        last_body = response.text[:200]
                         logger.warning(
-                            "eBay HTTP %s (filter=%s): %s",
+                            "eBay HTTP %s for %s (filter len=%d, has_aspect=%s)",
                             response.status_code,
-                            filter_str,
-                            last_body,
+                            log_label,
+                            len(filter_str),
+                            bool(aspect_filter),
                         )
                         if response.status_code >= 500:
                             break
                         response.raise_for_status()
                     data = response.json()
-                    if filter_str != filter_variants[0]:
+                    items = data.get("itemSummaries") or []
+                    if filter_str != primary_filter:
                         logger.info(
-                            "eBay search OK for %s using simplified filter",
+                            "eBay search OK for %s using fallback filter (conditions=%s)",
                             log_label,
+                            with_conditions,
                         )
-                    return self._parse_items(data.get("itemSummaries") or [])
+                    return self._parse_items(items)
                 except httpx.HTTPError as exc:
                     last_error = exc
                     wait = 2**attempt
@@ -175,6 +181,8 @@ class EbayClient:
             url = item.get("itemWebUrl")
             if not item_id or not title or not url:
                 continue
+            if not is_safe_ebay_listing_url(url):
+                continue
 
             listed_raw = item.get("itemOriginDate")
             if listed_raw:
@@ -186,16 +194,39 @@ class EbayClient:
 
             image = item.get("image") or {}
             image_url = image.get("imageUrl")
+            if image_url and not is_safe_ebay_image_url(image_url):
+                image_url = None
+
+            # Extract condition from eBay API response
+            condition = None
+            condition_id = item.get("conditionId")
+            if condition_id:
+                condition = str(condition_id)
 
             listings.append(
                 Listing(
                     item_id=item_id,
-                    title=title,
+                    title=sanitize_title(title),
                     url=url,
                     image_url=image_url,
                     listed_at=listed_at,
                     price=extract_price(item),
-                    raw=item,
+                    condition=condition,
                 )
             )
         return listings
+
+    def get_rate_limits(self) -> dict[str, Any] | None:
+        """Fetch rate limit information from eBay Analytics API."""
+        try:
+            token = self._get_token()
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            }
+            response = self._http.get(RATE_LIMITS_URL, headers=headers)
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:
+            logger.warning("Failed to fetch eBay rate limits: %s", exc)
+            return None

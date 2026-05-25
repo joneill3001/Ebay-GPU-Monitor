@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from src.models import MatchConfig
+from src.validation import sanitize_title
 
 # Titles matching any of these are never treated as a complete GPU.
 _REJECT_PATTERNS: list[re.Pattern[str]] = [
@@ -121,6 +122,9 @@ _ACCESSORY_PATTERNS = [
     re.compile(r"\bcover\s+for\b", re.I),
     re.compile(r"\bsuitable\s+for\b", re.I),
     re.compile(r"\breplacement\s+for\b", re.I),
+    re.compile(r"\bfan\s+for\b", re.I),
+    re.compile(r"\bcooling\s+fan\b", re.I),
+    re.compile(r"\bheatsink\s+fan\b", re.I),
 ]
 
 # Weak evidence the listing is a full card, not a part.
@@ -226,11 +230,24 @@ def _looks_like_complete_gpu(title: str) -> bool:
     return False
 
 
-def matches_title(title: str, config: MatchConfig) -> bool:
+def matches_title(title: str, config: MatchConfig, condition: str | None = None) -> bool:
+    title = sanitize_title(title)
     normalized = normalize_title(title)
 
     if _matches_reject_patterns(title):
         return False
+
+    # Filter by eBay condition - only allow New (1000), Used (1000-2000), or Open Box (1500)
+    # Reject: For parts or not working (7000), Seller Refurbished (2000), etc.
+    if condition:
+        # eBay condition IDs: 1000=New, 1500=Open Box, 2000-2500=Used, 7000=For parts/not working
+        # We only want: New, Open Box, and Used conditions
+        allowed_conditions = {
+            "1000", "1500", "2000", "2010", "2020", "2030", "2040", "2050", "2500",
+            "3000", "4000", "5000", "6000",
+        }
+        if condition not in allowed_conditions:
+            return False
 
     for term in config.require_terms:
         if not _word_match(term, normalized):

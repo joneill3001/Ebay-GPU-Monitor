@@ -34,7 +34,7 @@ class TestSearchGroups(unittest.TestCase):
         ]
         groups = build_search_groups(searches)
         self.assertEqual(len(groups), 1)
-        self.assertEqual(groups[0].query, "RTX 3060")
+        self.assertEqual(groups[0].query, "RTX 3060 graphics card")
         self.assertEqual(groups[0].api_max_price, 150)
         self.assertEqual(len(groups[0].targets), 2)
 
