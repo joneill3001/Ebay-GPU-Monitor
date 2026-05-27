@@ -50,7 +50,13 @@ class TestSearchGroups(unittest.TestCase):
         from src.config import _build_searches_from_prices
 
         prices = {
-            "channels": {"10": "1", "20": "1", "30": "1", "40": "1", "50": "1"},
+            "channels": {
+                "10": "1508058247511146647",
+                "20": "1508058216678821989",
+                "30": "1495353084384251969",
+                "40": "1495353084384251970",
+                "50": "1508058308735537172",
+            },
             "prices": {gpu.key: 100 for gpu in __import__("src.gpu_catalog", fromlist=["iter_gpu_definitions"]).iter_gpu_definitions()},
         }
         searches = _build_searches_from_prices(prices, {})

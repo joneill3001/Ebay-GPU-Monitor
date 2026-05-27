@@ -23,6 +23,16 @@ logger = logging.getLogger(__name__)
 API_USAGE_COOLDOWN_SECONDS = 30
 
 
+def _listed_display(listed_at: datetime) -> str:
+    if listed_at.tzinfo is None:
+        listed_at = listed_at.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    age_hours = (now - listed_at).total_seconds() / 3600
+    if age_hours >= 48:
+        return "Recently on eBay (eBay date may reflect an earlier listing)"
+    return _listed_ago(listed_at)
+
+
 def _listed_ago(listed_at: datetime) -> str:
     if listed_at.tzinfo is None:
         listed_at = listed_at.replace(tzinfo=timezone.utc)
@@ -87,7 +97,7 @@ def build_deal_embed(search: SearchConfig, listing: Listing) -> discord.Embed:
     )
     embed.add_field(name=price_label, value=f"£{price:.2f}", inline=True)
     embed.add_field(name="Target", value=f"£{target:.2f}", inline=True)
-    embed.add_field(name="Listed", value=_listed_ago(listing.listed_at), inline=True)
+    embed.add_field(name="Listed", value=_listed_display(listing.listed_at), inline=True)
 
     if listing.price.shipping_cost > 0:
         embed.add_field(
@@ -252,7 +262,7 @@ class DiscordNotifier:
         )
         embed.add_field(name="Price", value=f"£{listing.price.landed_cost:.2f}", inline=True)
         embed.add_field(name="Target", value=f"£{search.target_price:.2f}", inline=True)
-        embed.add_field(name="Listed", value=_listed_ago(listing.listed_at), inline=True)
+        embed.add_field(name="Listed", value=_listed_display(listing.listed_at), inline=True)
 
         if listing.image_url and is_safe_ebay_image_url(listing.image_url):
             embed.set_thumbnail(url=listing.image_url)

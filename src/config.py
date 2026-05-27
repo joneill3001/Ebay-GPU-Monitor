@@ -48,6 +48,10 @@ class AppConfig:
     ebay_api_daily_limit: int = 5000
     near_miss_percentage_threshold: float = 7.5
     near_misses_channel: str | None = None
+    relist_grace_minutes: int = 120
+    banned_words: list[str] = field(default_factory=list)
+    log_item_decisions: bool = True
+    auction_end_soon_minutes: int = 15
 
 
 def _normalize_token(value: str) -> str:
@@ -66,7 +70,7 @@ def _load_yaml(path: Path) -> dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
-def _match_for_gpu(gpu: GpuDefinition) -> MatchConfig:
+def _match_for_gpu(gpu: GpuDefinition, banned_words: list[str]) -> MatchConfig:
     if gpu.family == "gtx":
         require = ["gtx", gpu.model]
     else:
@@ -76,13 +80,14 @@ def _match_for_gpu(gpu: GpuDefinition) -> MatchConfig:
         variant=gpu.variant,
         family=gpu.family,
         require_terms=require,
-        exclude_terms=list(DEFAULT_EXCLUDE_TERMS),
+        exclude_terms=list(DEFAULT_EXCLUDE_TERMS) + banned_words,
     )
 
 
 def _build_searches_from_prices(
     prices_raw: dict[str, Any],
     settings: dict[str, Any],
+    banned_words: list[str] | None = None,
 ) -> list[SearchConfig]:
     if not settings.get("enabled", True):
         return []
@@ -93,6 +98,7 @@ def _build_searches_from_prices(
         settings.get("max_listing_age_minutes", 45)
     )
 
+    banned_words = banned_words or []
     searches: list[SearchConfig] = []
     for gpu in iter_gpu_definitions():
         price = prices.get(gpu.key)
@@ -122,7 +128,7 @@ def _build_searches_from_prices(
                 discord_channel_id=channel_id,
                 enabled=True,
                 max_listing_age_minutes=default_max_age,
-                match=_match_for_gpu(gpu),
+                match=_match_for_gpu(gpu, banned_words),
             )
         )
 
@@ -190,8 +196,37 @@ def load_config() -> AppConfig:
         minimum=0.1,
         maximum=50.0,
     )
+    relist_grace = clamp_int(
+        int(
+            os.getenv(
+                "RELIST_GRACE_MINUTES",
+                settings.get("relist_grace_minutes", 120),
+            )
+        ),
+        name="relist_grace_minutes",
+        minimum=0,
+        maximum=720,
+    )
+    auction_end_soon_minutes = clamp_int(
+        int(
+            os.getenv(
+                "AUCTION_END_SOON_MINUTES",
+                settings.get("auction_end_soon_minutes", 15),
+            )
+        ),
+        name="auction_end_soon_minutes",
+        minimum=1,
+        maximum=1440,
+    )
+    log_item_decisions = bool(settings.get("log_item_decisions", True))
+    banned_words_raw = settings.get("banned_words", [])
+    if banned_words_raw is None:
+        banned_words_raw = []
+    if not isinstance(banned_words_raw, list):
+        raise ValueError("settings.yaml banned_words must be a list of strings")
+    banned_words = [str(word).strip().lower() for word in banned_words_raw if str(word).strip()]
 
-    searches = _build_searches_from_prices(prices_raw, settings)
+    searches = _build_searches_from_prices(prices_raw, settings, banned_words)
     search_groups = build_search_groups(searches)
 
     near_misses_channel = prices_raw.get("near_misses_channel")
@@ -248,4 +283,8 @@ def load_config() -> AppConfig:
         ebay_api_daily_limit=api_daily_limit,
         near_miss_percentage_threshold=near_miss_threshold,
         near_misses_channel=near_misses_channel,
+        relist_grace_minutes=relist_grace,
+        banned_words=banned_words,
+        log_item_decisions=log_item_decisions,
+        auction_end_soon_minutes=auction_end_soon_minutes,
     )

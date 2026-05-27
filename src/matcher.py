@@ -96,6 +96,18 @@ _REJECT_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\bhdmi\s+only\b", re.I),
     re.compile(r"\bdisplayport\s+only\b", re.I),
     re.compile(r"\bi/?o\s+bracket\b", re.I),
+    re.compile(r"\bcooling\s+system\b", re.I),
+    re.compile(r"\b(?:hdmi|displayport|display\s+port|dp)\s+port\b", re.I),
+    re.compile(r"\bport\s+replacement\b", re.I),
+    re.compile(r"\breplacement\s+(?:hdmi|displayport|display\s+port|dp|io|i/o)\b", re.I),
+    re.compile(r"\breplacement\s+port\b", re.I),
+    re.compile(r"\bupgrade\s+kit\b", re.I),
+    re.compile(r"\brepair\s+kit\b", re.I),
+    re.compile(r"\bradiator\s+only\b", re.I),
+    re.compile(r"\breservoir\b", re.I),
+    re.compile(r"\bpump\s+only\b", re.I),
+    re.compile(r"\bloop\s+only\b", re.I),
+    re.compile(r"\bcustom\s+loop\b", re.I),
     re.compile(r"\bfake\b", re.I),
     re.compile(r"\breplica\b", re.I),
     re.compile(r"\bcounterfeit\b", re.I),
@@ -115,27 +127,33 @@ _REJECT_PATTERNS: list[re.Pattern[str]] = [
 ]
 
 _ACCESSORY_PATTERNS = [
-    re.compile(r"\bfor\s+(?:the\s+)?(?:nvidia\s+)?rtx\s+\d{4}", re.I),
+    re.compile(r"\bfor\s+(?:the\s+)?(?:nvidia\s+)?(?:gtx|rtx)\s+\d{4}", re.I),
     re.compile(r"\bcompatible\s+with\b", re.I),
-    re.compile(r"\bfits\s+(?:the\s+)?(?:nvidia\s+)?rtx\b", re.I),
+    re.compile(r"\bfits\s+(?:the\s+)?(?:nvidia\s+)?(?:gtx|rtx)\b", re.I),
     re.compile(r"\bcase\s+for\b", re.I),
     re.compile(r"\bcover\s+for\b", re.I),
     re.compile(r"\bsuitable\s+for\b", re.I),
     re.compile(r"\breplacement\s+for\b", re.I),
+    re.compile(r"\breplacement\b", re.I),
     re.compile(r"\bfan\s+for\b", re.I),
     re.compile(r"\bcooling\s+fan\b", re.I),
     re.compile(r"\bheatsink\s+fan\b", re.I),
+    re.compile(r"\bwith\s+heatsink\s+and\s+fan\b", re.I),
+    re.compile(r"\b(?:sold|selling)\s+separately\b", re.I),
 ]
 
-# Weak evidence the listing is a full card, not a part.
-_POSITIVE_CARD_PATTERNS: list[re.Pattern[str]] = [
+_STRONG_CARD_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\bgraphics\s+card\b", re.I),
-    re.compile(r"\bgraphics\b", re.I),
-    re.compile(r"\bgpu\b", re.I),
     re.compile(r"\bvideo\s+card\b", re.I),
-    re.compile(r"\bgeforce\b", re.I),
+    re.compile(r"\bgaming\s+(?:oc\s+)?(?:graphics|video)\s+card\b", re.I),
     re.compile(r"\bworkstation\s+card\b", re.I),
 ]
+
+# Water-cooled full cards often omit "graphics card" but include VRAM + AIB branding.
+_WATERCOOLED_CARD_HINT = re.compile(
+    r"\b(?:hydro|aio|liquid|water\s*cooled?|watercool(?:ed)?)\b.*\b\d{1,2}\s*gb\b",
+    re.I,
+)
 
 _AIB_BRAND_PATTERN = re.compile(
     r"\b(asus|msi|gigabyte|zotac|evga|palit|pny|galax|kfa2|inno3d|gainward|"
@@ -213,29 +231,32 @@ def _matches_reject_patterns(title: str) -> bool:
 
 
 def _looks_like_complete_gpu(title: str) -> bool:
-    """Require evidence this is a full graphics card listing."""
-    if any(p.search(title) for p in _POSITIVE_CARD_PATTERNS):
+    """Require strong evidence this is a full graphics card, not a part or kit."""
+    if any(p.search(title) for p in _STRONG_CARD_PATTERNS):
         return True
+    if _WATERCOOLED_CARD_HINT.search(title):
+        return True
+
     normalized = normalize_title(title)
     has_brand = _AIB_BRAND_PATTERN.search(normalized) is not None
     has_vram = _VRAM_PATTERN.search(normalized) is not None
-    if has_brand and has_vram:
+    has_chip = re.search(r"\b(?:gtx|rtx)\s*\d{4}", normalized) is not None
+
+    if has_brand and has_vram and has_chip:
         return True
-    if has_brand and re.search(r"\brtx\b", normalized):
-        return True
-    if has_brand and re.search(r"\bgtx\b", normalized):
-        return True
-    if re.search(r"\bgtx\b", normalized) and _VRAM_PATTERN.search(normalized):
+    if has_vram and has_chip and re.search(r"\bgeforce\b", normalized):
         return True
     return False
 
 
-def matches_title(title: str, config: MatchConfig, condition: str | None = None) -> bool:
+def explain_title_match(
+    title: str, config: MatchConfig, condition: str | None = None
+) -> tuple[bool, str]:
     title = sanitize_title(title)
     normalized = normalize_title(title)
 
     if _matches_reject_patterns(title):
-        return False
+        return False, "reject_pattern"
 
     # Filter by eBay condition - only allow New (1000), Used (1000-2000), or Open Box (1500)
     # Reject: For parts or not working (7000), Seller Refurbished (2000), etc.
@@ -247,28 +268,33 @@ def matches_title(title: str, config: MatchConfig, condition: str | None = None)
             "3000", "4000", "5000", "6000",
         }
         if condition not in allowed_conditions:
-            return False
+            return False, f"condition_disallowed:{condition}"
 
     for term in config.require_terms:
         if not _word_match(term, normalized):
-            return False
+            return False, f"missing_required:{term}"
 
     for term in config.exclude_terms:
         if _word_match(term, normalized):
-            return False
+            return False, f"banned_word:{term}"
 
     for pattern in _ACCESSORY_PATTERNS:
         if pattern.search(title):
-            return False
+            return False, "accessory_pattern"
 
     model_pattern = _build_model_pattern(config.model, config.variant)
     if not model_pattern.search(title):
-        return False
+        return False, "model_mismatch"
 
     if _reject_wrong_variant(title, config.model, config.variant):
-        return False
+        return False, "wrong_variant"
 
     if not _looks_like_complete_gpu(title):
-        return False
+        return False, "incomplete_gpu_evidence"
 
-    return True
+    return True, "accepted"
+
+
+def matches_title(title: str, config: MatchConfig, condition: str | None = None) -> bool:
+    ok, _ = explain_title_match(title, config, condition)
+    return ok

@@ -2,8 +2,21 @@
 # Batched eBay searches: 18 API calls/cycle (33 GPU targets). At 120s poll, ~510 cycles/17h ≈ 9,180 calls/day.
 poll_interval_seconds: 120
 max_listing_age_minutes: 45
+# Extra minutes for never-seen listings with slightly stale eBay dates (relist edge case).
+# Does not apply to listings days/weeks old — prevents backlog floods.
+relist_grace_minutes: 120
 limit: 50
 search_delay_seconds: 1.5
 enabled: true
 ebay_api_daily_limit: 5000
 near_miss_percentage_threshold: 10
+auction_end_soon_minutes: 15
+log_item_decisions: true
+# Case-insensitive blocked terms. If any term appears in a title, it is rejected.
+banned_words:
+  - "for spares"
+  - "repair"
+  - "heatsink only"
+  - "replacement for"
+  - "fans only"
+  - "fan for"

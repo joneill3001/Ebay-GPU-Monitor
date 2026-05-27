@@ -10,6 +10,7 @@ from urllib.parse import quote
 import httpx
 
 from src.ebay_filters import GRAPHICS_CARD_CATEGORY_ID, field_filter_fallbacks
+from src.listing_dates import parse_age_at
 from src.pricing import PriceInfo, extract_price
 from src.validation import (
     MAX_PRICE_GBP,
@@ -35,6 +36,7 @@ class Listing:
     listed_at: datetime
     price: PriceInfo
     condition: str | None = None
+    end_at: datetime | None = None
 
 
 class EbayClient:
@@ -184,13 +186,7 @@ class EbayClient:
             if not is_safe_ebay_listing_url(url):
                 continue
 
-            listed_raw = item.get("itemOriginDate")
-            if listed_raw:
-                listed_at = datetime.fromisoformat(
-                    listed_raw.replace("Z", "+00:00")
-                )
-            else:
-                listed_at = datetime.now(timezone.utc)
+            listed_at = parse_age_at(item)
 
             image = item.get("image") or {}
             image_url = image.get("imageUrl")
@@ -202,6 +198,13 @@ class EbayClient:
             condition_id = item.get("conditionId")
             if condition_id:
                 condition = str(condition_id)
+            end_at = None
+            end_raw = item.get("itemEndDate")
+            if end_raw:
+                try:
+                    end_at = datetime.fromisoformat(str(end_raw).replace("Z", "+00:00"))
+                except ValueError:
+                    end_at = None
 
             listings.append(
                 Listing(
@@ -212,6 +215,7 @@ class EbayClient:
                     listed_at=listed_at,
                     price=extract_price(item),
                     condition=condition,
+                    end_at=end_at,
                 )
             )
         return listings

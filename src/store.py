@@ -67,6 +67,17 @@ class DealStore:
         ).fetchone()
         return row is not None
 
+    def filter_seen_ids(self, item_ids: list[str]) -> set[str]:
+        """Return the subset of item_ids already in seen_items (single query)."""
+        if not item_ids:
+            return set()
+        placeholders = ",".join("?" for _ in item_ids)
+        rows = self._conn.execute(
+            f"SELECT item_id FROM seen_items WHERE item_id IN ({placeholders})",
+            item_ids,
+        ).fetchall()
+        return {row["item_id"] for row in rows}
+
     def mark_seen(self, item_id: str, search_id: str, *, commit: bool = True) -> None:
         self._conn.execute(
             "INSERT OR IGNORE INTO seen_items (item_id, search_id, alerted_at) VALUES (?, ?, ?)",
